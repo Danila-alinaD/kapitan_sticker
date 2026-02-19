@@ -40,27 +40,40 @@ function setCors(res, req) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
 
+function parseChatIds(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
 async function sendToTelegram(text) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
+  const chatIds = parseChatIds(process.env.TELEGRAM_CHAT_ID);
 
   if (!token) throw new Error('Missing TELEGRAM_BOT_TOKEN');
-  if (!chatId) throw new Error('Missing TELEGRAM_CHAT_ID');
+  if (!chatIds.length) throw new Error('Missing TELEGRAM_CHAT_ID');
 
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
-  const resp = await fetch(url, {
+  const payload = {
+    text,
+    parse_mode: 'HTML',
+    disable_web_page_preview: true,
+  };
+
+  const responses = await Promise.all(chatIds.map((chat_id) => fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      disable_web_page_preview: true,
-    }),
-  });
+    body: JSON.stringify({ ...payload, chat_id }),
+  })));
 
-  if (!resp.ok) {
-    const errText = await resp.text().catch(() => '');
-    throw new Error(`Telegram API error: ${resp.status} ${errText}`);
+  for (const resp of responses) {
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      throw new Error(`Telegram API error: ${resp.status} ${errText}`);
+    }
   }
 }
 
@@ -72,35 +85,21 @@ module.exports = async function handler(req, res) {
   }
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
-    return res.status(405).send('ERROR: Method Not Allowed');
+    return res.status(405).json({ ok: false, error: 'Method Not Allowed' });
   }
 
   try {
-    const ct = String(req.headers['content-type'] || '').toLowerCase();
-    const body = req.body;
-    let message = '';
+    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
+    const message = String(body && body.text ? body.text : '').trim();
 
-    if (ct.includes('application/x-www-form-urlencoded')) {
-      const form = typeof body === 'string' ? parseFormUrlEncoded(body) : (body || {});
-      message = buildTextFromForm(form);
-    } else if (ct.includes('application/json')) {
-      const obj = typeof body === 'string' ? JSON.parse(body || '{}') : (body || {});
-      if (obj && typeof obj.text === 'string') message = obj.text;
-      else message = JSON.stringify(obj);
-    } else {
-      // text/plain or unknown
-      message = typeof body === 'string' ? body : '';
-    }
-
-    message = String(message || '').trim();
     if (!message) {
-      return res.status(400).send('ERROR: Empty body');
+      return res.status(400).json({ ok: false, error: 'Empty text' });
     }
 
     await sendToTelegram(message);
 
-    return res.status(200).send('OK');
+    return res.status(200).json({ ok: true });
   } catch (e) {
-    return res.status(500).send(`ERROR: ${String(e && e.message ? e.message : e)}`);
+    return res.status(500).json({ ok: false, error: String(e && e.message ? e.message : e) });
   }
 };
