@@ -42,19 +42,36 @@ function setCors(res, req) {
 
 function readRawBody(req, maxBytes = 256 * 1024) {
   return new Promise((resolve, reject) => {
+    if (req.readableEnded || req.complete) {
+      resolve('');
+      return;
+    }
+
     const chunks = [];
     let size = 0;
+
+    const timer = setTimeout(() => {
+      reject(new Error('Body read timeout'));
+    }, 2000);
 
     req.on('data', (chunk) => {
       size += chunk.length;
       if (size > maxBytes) {
+        clearTimeout(timer);
         reject(new Error('Body too large'));
         return;
       }
       chunks.push(chunk);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    req.on('error', reject);
+
+    req.on('end', () => {
+      clearTimeout(timer);
+      resolve(Buffer.concat(chunks).toString('utf8'));
+    });
+    req.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
   });
 }
 
