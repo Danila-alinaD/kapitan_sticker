@@ -40,6 +40,57 @@ function setCors(res, req) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
 
+function readRawBody(req, maxBytes = 256 * 1024) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > maxBytes) {
+        reject(new Error('Body too large'));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
+function extractMessage(contentType, rawBody, parsedBody) {
+  const ct = String(contentType || '').toLowerCase();
+
+  // Prefer already-parsed body if platform provided it
+  if (typeof parsedBody === 'string' && parsedBody.trim()) return parsedBody.trim();
+  if (parsedBody && typeof parsedBody === 'object' && typeof parsedBody.text === 'string' && parsedBody.text.trim()) {
+    return parsedBody.text.trim();
+  }
+
+  const raw = String(rawBody || '').trim();
+  if (!raw) return '';
+
+  if (ct.includes('application/x-www-form-urlencoded')) {
+    const form = parseFormUrlEncoded(raw);
+    return String(buildTextFromForm(form) || '').trim();
+  }
+
+  if (ct.includes('application/json')) {
+    try {
+      const obj = JSON.parse(raw);
+      if (obj && typeof obj.text === 'string' && obj.text.trim()) return obj.text.trim();
+      // fallback: stringify
+      return JSON.stringify(obj);
+    } catch {
+      // if invalid JSON, treat as plain text
+      return raw;
+    }
+  }
+
+  // text/plain or unknown
+  return raw;
+}
+
 async function sendToTelegram(text) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
@@ -76,20 +127,8 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    const ct = String(req.headers['content-type'] || '').toLowerCase();
-    let message = '';
-
-    if (ct.includes('application/x-www-form-urlencoded')) {
-      const form = typeof req.body === 'string' ? parseFormUrlEncoded(req.body) : (req.body || {});
-      message = buildTextFromForm(form);
-    } else {
-      // text/plain or anything else
-      if (typeof req.body === 'string') message = req.body;
-      else if (req.body && typeof req.body.text === 'string') message = req.body.text;
-      else message = '';
-    }
-
-    message = String(message || '').trim();
+    const rawBody = await readRawBody(req);
+    const message = extractMessage(req.headers['content-type'], rawBody, req.body);
     if (!message) {
       return res.status(400).send('ERROR: Empty body');
     }
