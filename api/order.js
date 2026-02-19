@@ -33,6 +33,13 @@ function buildTextFromForm(form) {
   return lines.join('\n');
 }
 
+function setCors(res, req) {
+  const origin = req.headers.origin;
+  res.setHeader('Access-Control-Allow-Origin', origin || '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+}
+
 async function sendToTelegram(text) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
@@ -58,6 +65,11 @@ async function sendToTelegram(text) {
 }
 
 module.exports = async function handler(req, res) {
+  setCors(res, req);
+  if (req.method === 'OPTIONS') {
+    res.status(204).end();
+    return;
+  }
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).send('ERROR: Method Not Allowed');
