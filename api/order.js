@@ -1,33 +1,33 @@
-function normalizeTelegram(value) {
-  const s = String(value || '').trim();
-  if (!s) return '';
-  return s.startsWith('@') ? s : `@${s}`;
+function parseFormUrlEncoded(body) {
+  const out = {};
+  const s = String(body || '');
+  if (!s) return out;
+  for (const part of s.split('&')) {
+    if (!part) continue;
+    const idx = part.indexOf('=');
+    const k = idx === -1 ? part : part.slice(0, idx);
+    const v = idx === -1 ? '' : part.slice(idx + 1);
+    const key = decodeURIComponent(k.replace(/\+/g, ' '));
+    const val = decodeURIComponent(v.replace(/\+/g, ' '));
+    out[key] = val;
+  }
+  return out;
 }
 
-function buildMessage(payload) {
-  const customer = payload && payload.customer ? payload.customer : {};
-  const items = Array.isArray(payload && payload.items ? payload.items : []) ? payload.items : [];
-  const totals = payload && payload.totals ? payload.totals : {};
+function buildTextFromForm(form) {
+  const name = String(form.name || '').trim();
+  const phone = String(form.phone || '').trim();
+  const telegram = String(form.telegram || '').trim();
+  const text = String(form.text || '').trim();
+
+  if (text) return text;
 
   const lines = [
     'Нове замовлення з сайту «Капітан Стікер»',
     '',
-    `Імʼя: ${String(customer.name || '').trim()}`,
-    `Телефон: ${String(customer.phone || '').trim()}`,
-    `Telegram: ${normalizeTelegram(customer.telegram)}`,
-    '',
-    'Товари:',
-    ...items.map((it) => {
-      const title = String(it && it.title ? it.title : '').trim();
-      const size = String(it && it.size ? it.size : '').trim();
-      const qty = Number(it && it.qty ? it.qty : 0) || 0;
-      const sum = Number(it && it.sum ? it.sum : 0) || 0;
-      return `- ${title}${size ? ` (${size})` : ''} x${qty} = ${sum} ₴`;
-    }),
-    '',
-    `Підсумок: ${Number(totals.subtotal || 0) || 0} ₴`,
-    totals.discount ? `Знижка: -${Number(totals.discount || 0) || 0} ₴` : '',
-    `Разом: ${Number(totals.total || 0) || 0} ₴`,
+    `Імʼя: ${name}`,
+    `Телефон: ${phone}`,
+    `Telegram: ${telegram}`,
   ].filter(Boolean);
 
   return lines.join('\n');
@@ -57,31 +57,35 @@ async function sendToTelegram(text) {
   }
 }
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
-    return res.status(405).json({ ok: false, error: 'Method Not Allowed' });
+    return res.status(405).send('ERROR: Method Not Allowed');
   }
 
   try {
-    const payload = req.body || {};
-    const customer = payload.customer || {};
+    const ct = String(req.headers['content-type'] || '').toLowerCase();
+    let message = '';
 
-    if (!String(customer.name || '').trim()) {
-      return res.status(400).json({ ok: false, error: 'Missing customer.name' });
-    }
-    if (!String(customer.phone || '').trim()) {
-      return res.status(400).json({ ok: false, error: 'Missing customer.phone' });
-    }
-    if (!String(customer.telegram || '').trim()) {
-      return res.status(400).json({ ok: false, error: 'Missing customer.telegram' });
+    if (ct.includes('application/x-www-form-urlencoded')) {
+      const form = typeof req.body === 'string' ? parseFormUrlEncoded(req.body) : (req.body || {});
+      message = buildTextFromForm(form);
+    } else {
+      // text/plain or anything else
+      if (typeof req.body === 'string') message = req.body;
+      else if (req.body && typeof req.body.text === 'string') message = req.body.text;
+      else message = '';
     }
 
-    const message = buildMessage(payload);
+    message = String(message || '').trim();
+    if (!message) {
+      return res.status(400).send('ERROR: Empty body');
+    }
+
     await sendToTelegram(message);
 
-    return res.status(200).json({ ok: true });
+    return res.status(200).send('OK');
   } catch (e) {
-    return res.status(500).json({ ok: false, error: String(e && e.message ? e.message : e) });
+    return res.status(500).send(`ERROR: ${String(e && e.message ? e.message : e)}`);
   }
-}
+};
